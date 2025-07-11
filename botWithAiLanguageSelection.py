@@ -156,6 +156,7 @@ def handle_text(message):
     bot.send_message(message.chat.id, reply)
 
 # === Webhook (for Render) ===
+#bind thison server env  as https://botai-2789.onrender.com/bot
 @app.route('/bot', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
