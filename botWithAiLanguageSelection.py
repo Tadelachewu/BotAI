@@ -12,7 +12,8 @@
 # # === CONFIGURATION ===
 # BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 # GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+# GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+
 
 # bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 # user_languages = {}
@@ -200,7 +201,8 @@
 # # === CONFIGURATION ===
 # BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 # GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-# GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+# GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+
 
 # bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 # user_languages = {}
@@ -418,41 +420,37 @@ import requests
 import time
 import json
 import traceback
+from flask import Flask, request
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 
 # === Load environment variables ===
 load_dotenv()
-
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Only required in production
+ENV = os.getenv('ENV', 'development')  # 'production' or 'development'
 
+# === Validate config ===
 if not BOT_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("⚠️ BOT_TOKEN and GEMINI_API_KEY must be set in the environment variables.")
+    raise ValueError("⚠️ BOT_TOKEN and GEMINI_API_KEY must be set.")
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-# === Bot setup ===
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+app = Flask(__name__)
 
-# === Files for persistence ===
+# === Storage Files ===
 LANG_FILE = 'user_languages.json'
 NAME_FILE = 'user_names.json'
+user_languages, user_names = {}, {}
 
-# === In-memory user data ===
-user_languages = {}
-user_names = {}
-
-# === Load data if exists ===
 def load_data():
-    global user_languages, user_names
     try:
         if os.path.exists(LANG_FILE):
             with open(LANG_FILE, 'r') as f:
-                user_languages = json.load(f)
+                user_languages.update(json.load(f))
         if os.path.exists(NAME_FILE):
             with open(NAME_FILE, 'r') as f:
-                user_names = json.load(f)
+                user_names.update(json.load(f))
     except Exception as e:
         print("❌ Failed to load data:", e)
 
@@ -467,12 +465,9 @@ def save_data():
 
 load_data()
 
-# === Logging ===
-def debug_log(message):
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}")
+def debug_log(msg):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
-# === Language Buttons ===
 def get_language_buttons():
     markup = InlineKeyboardMarkup()
     markup.row(
@@ -481,16 +476,15 @@ def get_language_buttons():
     )
     return markup
 
-# === Romantic AI Prompt ===
 def ask_romantic_ai(user_input, language, user_id):
     headers = {"Content-Type": "application/json"}
-    girl_name = user_names.get(str(user_id), {}).get('girl', 'Zebe')
-    boy_name = user_names.get(str(user_id), {}).get('boy', 'Tadele')
+    girl = user_names.get(str(user_id), {}).get('girl', 'Zebe')
+    boy = user_names.get(str(user_id), {}).get('boy', 'Tadele')
 
     if language == "am":
-        prompt = f"""አንተ {boy_name} መስፍን ነህ፣ የ{girl_name} ፍቅረኛ። መልስህ በፍቅር፣ ሞገስ፣ አስቂኝነት፣ እና እውነተኛ ስሜት ይሁን።\n\n{girl_name}: {user_input}\n{boy_name}:"""
+        prompt = f"አንተ {boy} መስፍን ነህ፣ የ{girl} ፍቅረኛ።\n\n{girl}: {user_input}\n{boy}:"
     else:
-        prompt = f"""You are {boy_name} Mesfin, {girl_name}'s loving boyfriend. Respond deeply, romantically, and poetically.\n\n{girl_name}: {user_input}\n{boy_name}:"""
+        prompt = f"You are {boy} Mesfin, {girl}'s loving boyfriend.\n\n{girl}: {user_input}\n{boy}:"
 
     data = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -503,82 +497,84 @@ def ask_romantic_ai(user_input, language, user_id):
     }
 
     try:
-        response = requests.post(GEMINI_URL, headers=headers, json=data, timeout=30)
-        response.raise_for_status()
-        result = response.json()
-
-        if not result.get('candidates'):
-            return "💔 Please try again."
-
-        return result['candidates'][0]['content']['parts'][0]['text']
-
+        res = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
+            headers=headers, json=data, timeout=30
+        )
+        res.raise_for_status()
+        output = res.json()
+        return output['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
-        debug_log(f"Gemini error: {str(e)}\n{traceback.format_exc()}")
+        debug_log(f"❌ Gemini error: {e}\n{traceback.format_exc()}")
         return "💔 Something went wrong. Please try again."
 
-# === /start command ===
+# === Handlers ===
 @bot.message_handler(commands=['start'])
-def send_welcome(message):
-    debug_log(f"/start from {message.from_user.id}")
-    msg = "💖 Welcome! Please choose your language:"
-    bot.send_message(message.chat.id, msg, reply_markup=get_language_buttons())
+def welcome(message):
+    debug_log(f"/start by {message.from_user.id}")
+    bot.send_message(message.chat.id, "💖 Welcome! Choose your language:", reply_markup=get_language_buttons())
 
-# === /setnames command ===
 @bot.message_handler(commands=['setnames'])
 def set_names(message):
-    try:
-        args = message.text.split()[1:]
-        if len(args) != 2:
-            bot.send_message(message.chat.id, "Usage: /setnames [your_name] [his_name]")
-            return
+    args = message.text.split()[1:]
+    if len(args) != 2:
+        bot.send_message(message.chat.id, "Usage: /setnames [your_name] [his_name]")
+        return
+    user_id = str(message.from_user.id)
+    user_names[user_id] = {'girl': args[0], 'boy': args[1]}
+    save_data()
+    lang = user_languages.get(user_id, 'en')
+    response = f"✅ Names updated!\nYou: {args[0]}\nHim: {args[1]}" if lang == 'en' else f"✅ ስሞች ተቀይረዋል!\nአንቺ: {args[0]}\nእሱ: {args[1]}"
+    bot.send_message(message.chat.id, response)
 
-        user_id = str(message.from_user.id)
-        user_names[user_id] = {
-            'girl': args[0],
-            'boy': args[1]
-        }
-        save_data()
-        lang = user_languages.get(user_id, 'en')
-        response = f"✅ Names updated!\nYou: {args[0]}\nHim: {args[1]}" if lang == "en" else f"✅ ስሞች ተቀይረዋል!\nአንቺ: {args[0]}\nእሱ: {args[1]}"
-        bot.send_message(message.chat.id, response)
-    except Exception as e:
-        debug_log(f"Setnames Error: {str(e)}")
-
-# === Handle button clicks ===
 @bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-    try:
-        user_id = str(call.from_user.id)
-        lang = call.data.split("_")[1]
-        user_languages[user_id] = lang
-        save_data()
-        bot.answer_callback_query(call.id, text="Language set!")
-        text = "🌹 Speak your heart!\nTo change names: /setnames yourname hisname" if lang == "en" else "🌹 ልብህን ንገርኝ!\nስሞችን ለመቀየር: /setnames አንቺ እና እሱ"
-        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id)
-    except Exception as e:
-        debug_log(f"Callback Error: {str(e)}")
+def set_language(call):
+    user_id = str(call.from_user.id)
+    lang = call.data.split("_")[1]
+    user_languages[user_id] = lang
+    save_data()
+    bot.answer_callback_query(call.id, "Language set!")
+    text = "🌹 Speak your heart!\n/setnames yourname hisname" if lang == "en" else "🌹 ልብህን ንገርኝ!\n/setnames አንቺ እና እሱ"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
 
-# === Main message handler ===
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
     user_id = str(message.from_user.id)
     lang = user_languages.get(user_id)
-
     if not lang:
         bot.send_message(message.chat.id, "💬 Choose your language:", reply_markup=get_language_buttons())
         return
-
     bot.send_chat_action(message.chat.id, 'typing')
     time.sleep(min(max(1, len(message.text) / 20), 3))
     reply = ask_romantic_ai(message.text, lang, user_id)
     bot.send_message(message.chat.id, reply)
 
-# === Start polling ===
-if __name__ == "__main__":
-    debug_log("✅ Bot is running in production mode.")
-    while True:
-        try:
-            bot.polling(none_stop=True, timeout=30)
-        except Exception as e:
-            debug_log(f"Polling Error: {e}")
-            time.sleep(10)
+# === Webhook endpoint ===
+@app.route('/bot', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        update = telebot.types.Update.de_json(request.data.decode('utf-8'))
+        bot.process_new_updates([update])
+        return '', 200
+    return 'Invalid request', 403
+
+@app.route('/')
+def index():
+    return "🤖 Gemini Romantic Bot is alive!"
+
+# === Entrypoint ===
+if __name__ == '__main__':
+    if ENV == 'production':
+        debug_log("✅ Running in production (webhook) mode...")
+        bot.remove_webhook()
+        bot.set_webhook(url=WEBHOOK_URL)
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    else:
+        debug_log("✅ Running in development (polling) mode...")
+        bot.remove_webhook()  # <<< ADD THIS LINE
+        while True:
+            try:
+                bot.polling(none_stop=True, timeout=30)
+            except Exception as e:
+                debug_log(f"Polling error: {e}")
+                time.sleep(10)
